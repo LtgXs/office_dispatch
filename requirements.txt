@@ -1,0 +1,8 @@
+pywin32
+xlwings
+os
+shutil
+datetime
+time
+hashlib
+PyGithub
