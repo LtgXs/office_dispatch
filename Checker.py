@@ -92,7 +92,7 @@ def process_files():
                     if copy_file(file_name, file_size, "Excel", target_folder, log_file_path):
                         new_files_detected = True
         except Exception as e:
-            print("No Excel instances found: {e}")
+            print(f"No Excel instances found: {e}")
 
         if word:
             for document in word.Documents:
@@ -127,13 +127,15 @@ def upload_to_github(repo_name, commit_message, token, target_folder, log_file_p
                 rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
                 try:
                     existing_file = repo.get_contents(rel_path)
-                    repo.update_file(
-                        path=rel_path,
-                        message=commit_message,
-                        content=content,
-                        sha=existing_file.sha,
-                        branch="main"
-                    )
+                    if existing_file.sha != hashlib.sha1(content).hexdigest():
+                        repo.update_file(
+                            path=rel_path,
+                            message=commit_message,
+                            content=content,
+                            sha=existing_file.sha,
+                            branch="main"
+                        )
+                        commit_files.append(rel_path)
                 except:
                     repo.create_file(
                         path=rel_path,
@@ -141,10 +143,12 @@ def upload_to_github(repo_name, commit_message, token, target_folder, log_file_p
                         content=content,
                         branch="main"
                     )
-                commit_files.append(rel_path)
+                    commit_files.append(rel_path)
         
         if commit_files:
             log_message(f"Files uploaded to GitHub successfully: {', '.join(commit_files)}", log_file_path)
+        else:
+            log_message("No changes detected, no files uploaded", log_file_path)
     except Exception as e:
         log_message(f"Failed to upload files to GitHub due to {e}", log_file_path)
 
