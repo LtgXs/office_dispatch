@@ -20,9 +20,9 @@ ppt = initialize_com_object("PowerPoint.Application")
 word = initialize_com_object("Word.Application")
 
 appdata_path = os.getenv('APPDATA')
-repo_path = os.path.join(appdata_path, "OfficeDispatch")
+local_repo_path = os.path.join(appdata_path, "OfficeDispatch")
 
-os.makedirs(repo_path, exist_ok=True)
+os.makedirs(local_repo_path, exist_ok=True)
 
 processed_files = set()
 log_initialized = False
@@ -64,7 +64,7 @@ def process_files():
     log_file_path = None
     try:
         current_date = datetime.datetime.now().strftime("%Y.%m.%d")
-        target_folder = os.path.join(repo_path, current_date)
+        target_folder = os.path.join(local_repo_path, current_date)
 
         os.makedirs(os.path.join(target_folder, "PowerPoint"), exist_ok=True)
         os.makedirs(os.path.join(target_folder, "Excel"), exist_ok=True)
@@ -92,7 +92,7 @@ def process_files():
                     if copy_file(file_name, file_size, "Excel", target_folder, log_file_path):
                         new_files_detected = True
         except Exception as e:
-            print("No Excel instances found: {e}")
+            print(f"No Excel instances found: {e}")
 
         if word:
             for document in word.Documents:
@@ -109,7 +109,7 @@ def process_files():
             log_message(f"Error in processing files: {e}", log_file_path)
         return False, None, None
 
-def upload_to_github(repo_name, commit_message, token, target_folder, log_file_path):
+def upload_to_github(repo_name, token, target_folder, log_file_path):
     try:
         g = Github(token)
         user = g.get_user()
@@ -124,16 +124,19 @@ def upload_to_github(repo_name, commit_message, token, target_folder, log_file_p
                 with open(file_path, "rb") as file:
                     content = file.read()
                 
-                rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
+                rel_path = os.path.relpath(file_path, local_repo_path).replace("\\", "/")
+                commit_message = f"Upload '{file_name}'"
                 try:
                     existing_file = repo.get_contents(rel_path)
-                    repo.update_file(
-                        path=rel_path,
-                        message=commit_message,
-                        content=content,
-                        sha=existing_file.sha,
-                        branch="main"
-                    )
+                    if existing_file.sha != hashlib.sha1(content).hexdigest():
+                        repo.update_file(
+                            path=rel_path,
+                            message=commit_message,
+                            content=content,
+                            sha=existing_file.sha,
+                            branch="main"
+                        )
+                        commit_files.append(rel_path)
                 except:
                     repo.create_file(
                         path=rel_path,
@@ -141,19 +144,20 @@ def upload_to_github(repo_name, commit_message, token, target_folder, log_file_p
                         content=content,
                         branch="main"
                     )
-                commit_files.append(rel_path)
+                    commit_files.append(rel_path)
         
         if commit_files:
             log_message(f"Files uploaded to GitHub successfully: {', '.join(commit_files)}", log_file_path)
+        else:
+            log_message("No changes detected, no files uploaded", log_file_path)
     except Exception as e:
         log_message(f"Failed to upload files to GitHub due to {e}", log_file_path)
 
 repo_name = "your_repo_name"
-commit_message = "your_commit_message"
 github_token = "enter_your_gitub_token_here"
 
 while True:
     new_files_detected, target_folder, log_file_path = process_files()
     if new_files_detected:
-        upload_to_github(repo_name, commit_message, github_token, target_folder, log_file_path)
+        upload_to_github(repo_name, github_token, target_folder, log_file_path)
     time.sleep(30)
