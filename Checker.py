@@ -20,9 +20,9 @@ ppt = initialize_com_object("PowerPoint.Application")
 word = initialize_com_object("Word.Application")
 
 appdata_path = os.getenv('APPDATA')
-repo_path = os.path.join(appdata_path, "OfficeDispatch")
+local_repo_path = os.path.join(appdata_path, "OfficeDispatch")
 
-os.makedirs(repo_path, exist_ok=True)
+os.makedirs(local_repo_path, exist_ok=True)
 
 processed_files = set()
 log_initialized = False
@@ -64,7 +64,7 @@ def process_files():
     log_file_path = None
     try:
         current_date = datetime.datetime.now().strftime("%Y.%m.%d")
-        target_folder = os.path.join(repo_path, current_date)
+        target_folder = os.path.join(local_repo_path, current_date)
 
         os.makedirs(os.path.join(target_folder, "PowerPoint"), exist_ok=True)
         os.makedirs(os.path.join(target_folder, "Excel"), exist_ok=True)
@@ -124,7 +124,7 @@ def upload_to_github(repo_name, commit_message, token, target_folder, log_file_p
                 with open(file_path, "rb") as file:
                     content = file.read()
                 
-                rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
+                rel_path = os.path.relpath(file_path, local_repo_path).replace("\\", "/")
                 try:
                     existing_file = repo.get_contents(rel_path)
                     if existing_file.sha != hashlib.sha1(content).hexdigest():
