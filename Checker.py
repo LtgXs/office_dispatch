@@ -154,7 +154,6 @@ def upload_to_github(repo_name, token, target_folder, log_file_path):
         log_message(f"Failed to upload files to GitHub due to {e}", log_file_path)
 
 repo_name = "your_repo_name"
-commit_message = "your_commit_message"
 github_token = "enter_your_gitub_token_here"
 
 while True:
