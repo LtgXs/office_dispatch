@@ -109,7 +109,7 @@ def process_files():
             log_message(f"Error in processing files: {e}", log_file_path)
         return False, None, None
 
-def upload_to_github(repo_name, commit_message, token, target_folder, log_file_path):
+def upload_to_github(repo_name, token, target_folder, log_file_path):
     try:
         g = Github(token)
         user = g.get_user()
@@ -125,6 +125,7 @@ def upload_to_github(repo_name, commit_message, token, target_folder, log_file_p
                     content = file.read()
                 
                 rel_path = os.path.relpath(file_path, local_repo_path).replace("\\", "/")
+                commit_message = f"Upload '{file_name}'"
                 try:
                     existing_file = repo.get_contents(rel_path)
                     if existing_file.sha != hashlib.sha1(content).hexdigest():
@@ -159,5 +160,5 @@ github_token = "enter_your_gitub_token_here"
 while True:
     new_files_detected, target_folder, log_file_path = process_files()
     if new_files_detected:
-        upload_to_github(repo_name, commit_message, github_token, target_folder, log_file_path)
+        upload_to_github(repo_name, github_token, target_folder, log_file_path)
     time.sleep(30)
