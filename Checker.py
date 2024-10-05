@@ -6,6 +6,8 @@ import datetime
 import time
 import hashlib
 import json
+from cryptography.fernet import Fernet
+import base64
 from github import Github
 
 DEFAULT_CONFIG = {
@@ -17,6 +19,9 @@ DEFAULT_CONFIG = {
 
 CONFIG_PATH = 'config.json'
 LOG_FILE_PATH = 'log.txt'
+password = "enter_your_password_here" # Encrypt your github token
+key = base64.urlsafe_b64encode(hashlib.sha256(password.encode()).digest())
+cipher_suite = Fernet(key)
 
 def log_message(message, log_file_path=LOG_FILE_PATH):
     if not os.path.exists(log_file_path):
@@ -32,6 +37,12 @@ def validate_config_value(key, value):
         return isinstance(value, str) and len(value) > 0
     return True
 
+def encrypt_token(token):
+    return cipher_suite.encrypt(token.encode()).decode()
+
+def decrypt_token(encrypted_token):
+    return cipher_suite.decrypt(encrypted_token.encode()).decode()
+
 def load_config():
     config = DEFAULT_CONFIG.copy()
     if os.path.exists(CONFIG_PATH):
@@ -46,8 +57,25 @@ def load_config():
                         log_message(f'Invalid value for {key}: {user_config[key]}. Resetting to default value.')
                 else:
                     log_message(f'Missing key {key}. Resetting to default value.')
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(config, f, ensure_ascii=False, indent=4)
+            
+            if "github_token" in config:
+                if config["github_token"].startswith("ghp_"):
+                    encrypted_token = encrypt_token(config["github_token"])
+                    config["github_token"] = config["github_token"]
+                    user_config["github_token"] = encrypted_token
+                    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                        json.dump(user_config, f, ensure_ascii=False, indent=4)
+                else:
+                    try:
+                        decrypted_token = decrypt_token(config["github_token"])
+                        if "ghp_" in decrypted_token:
+                            config["github_token"] = decrypted_token
+                        else:
+                            log_message("Decrypted token does not contain 'ghp_'. Terminating script.")
+                            raise ValueError("Decryption failed")
+                    except Exception as e:
+                        log_message(f"Failed to decrypt GitHub token: {e}. Terminating script.")
+                        raise ValueError("Decryption failed")
         except (json.JSONDecodeError, ValueError) as e:
             log_message(f'Error loading config: {e}. Resetting invalid entries to default values.')
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
@@ -55,9 +83,14 @@ def load_config():
     else:
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(config, f, ensure_ascii=False, indent=4)
+    
     return config
 
-config = load_config()
+try:
+    config = load_config()
+except ValueError:
+    print("Script terminated due to decryption failure.")
+    exit(1)
 
 def initialize_com_object(app_name):
     while True:
