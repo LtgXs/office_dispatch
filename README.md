@@ -43,7 +43,7 @@ OfficeDispatch is an automated python script for detecting and uploading PowerPo
 ## Configuration File Specification
 
 - `repo_name`: The name of the GitHub repository.
-- `github_token`: The GitHub access token.
+- `github_token`: The GitHub access token. Notice: Token will be encrypted by the script after first run, you can change your password in the script
 - `retry_interval`: The retry interval (in seconds) when initializing COM objects fails.
 - `check_interval`: The interval (in seconds) for detecting new files.
 
