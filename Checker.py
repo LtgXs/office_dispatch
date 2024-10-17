@@ -199,7 +199,7 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
     g = Github(token)
     user = g.get_user()
     repo = user.get_repo(repo_name)
-    
+
     while not upload_queue.empty():
         file_path = upload_queue.get()
         with open(file_path, "rb") as file:
@@ -207,25 +207,48 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
         file_name = os.path.basename(file_path)
         full_rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
         commit_message = f"Update {file_name}"
-        try:
-            existing_file = repo.get_contents(full_rel_path)
-            if existing_file.sha != hashlib.sha1(content).hexdigest():
-                repo.update_file(
-                    path=full_rel_path,
-                    message=commit_message,
-                    content=content,
-                    sha=existing_file.sha,
-                    branch="main"
-                )
-                log_message(f"Updated {full_rel_path}", log_file_path)
-        except Exception:
-            repo.create_file(
-                path=full_rel_path,
-                message=commit_message,
-                content=content,
-                branch="main"
-            )
-            log_message(f"Uploaded {full_rel_path}", log_file_path)
+
+        attempt = 0
+        success = False
+        while attempt < config['retry_interval'] and not success:
+            try:
+                existing_file = repo.get_contents(full_rel_path)
+                if existing_file.sha != hashlib.sha1(content).hexdigest():
+                    repo.update_file(
+                        path=full_rel_path,
+                        message=commit_message,
+                        content=content,
+                        sha=existing_file.sha,
+                        branch="main"
+                    )
+                    log_message(f"Updated {full_rel_path}", log_file_path)
+                success = True
+            except Exception as e:
+                if attempt < config['retry_interval'] - 1:
+                    log_message(f"Error updating {full_rel_path}: {e}. Retrying...")
+                    time.sleep(config['retry_interval'])
+                else:
+                    log_message(f"Failed to update {full_rel_path} after multiple attempts: {e}")
+                attempt += 1
+
+            if not success:
+                try:
+                    repo.create_file(
+                        path=full_rel_path,
+                        message=commit_message,
+                        content=content,
+                        branch="main"
+                    )
+                    log_message(f"Uploaded {full_rel_path}", log_file_path)
+                    success = True
+                except Exception as e:
+                    if attempt < config['retry_interval'] - 1:
+                        log_message(f"Error uploading {full_rel_path}: {e}. Retrying...")
+                        time.sleep(config['retry_interval'])
+                    else:
+                        log_message(f"Failed to upload {full_rel_path} after multiple attempts: {e}")
+                    attempt += 1
+
         upload_queue.task_done()
 
 while True:
