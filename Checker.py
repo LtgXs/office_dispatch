@@ -19,7 +19,8 @@ DEFAULT_CONFIG = {
     "check_interval": 30
 }
 
-CONFIG_PATH = 'config.json'
+script_dir = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(script_dir, "config.json")
 PASSWORD = "enter_your_password_here" # Encrypt your github token
 
 current_date = datetime.datetime.now().strftime("%Y.%m.%d")
@@ -29,9 +30,19 @@ repo_path = os.path.join(appdata_path, "OfficeDispatch")
 LOG_FILE_PATH = os.path.join(repo_path, current_date, f'{current_date}.log')
 cipher_suite = Fernet(key)
 upload_queue = queue.Queue()
+global log_initialized
+log_initialized = False
 
 
 def log_message(message, log_file_path=LOG_FILE_PATH):
+    global log_initialized
+    log_dir = os.path.dirname(log_file_path)
+    os.makedirs(log_dir, exist_ok=True)  
+    if not log_initialized:
+        if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 0:
+            with open(log_file_path, 'a', encoding='utf-8') as log:
+                log.write('\n')
+        log_initialized = True
     print(message)
     with open(log_file_path, "a", encoding='utf-8') as log_file:
         log_file.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
@@ -201,8 +212,8 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
             content = file.read()
         file_name = os.path.basename(file_path)
         full_rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
-        commit_message = f"Update {file_name}"
-
+        commit_message_upload = f"Upload {file_name}"
+        commit_message_update = f"Update {file_name}"
         attempt = 0
         success = False
         while attempt < config['retry_interval'] and not success:
@@ -210,7 +221,7 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
                 existing_file = repo.get_contents(full_rel_path)
                 repo.update_file(
                     path=full_rel_path,
-                    message=commit_message,
+                    message=commit_message_update,
                     content=content,
                     sha=existing_file.sha,
                     branch="main"
@@ -222,7 +233,7 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
                     try:
                         repo.create_file(
                             path=full_rel_path,
-                            message=commit_message,
+                            message=commit_message_upload,
                             content=content,
                             branch="main"
                         )
@@ -240,15 +251,18 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
         if not success:
             log_message(f"Failed to process {full_rel_path} after multiple attempts.")
         upload_queue.task_done()
+def main():
+    while True:
+        if ppt is None:
+            ppt = initialize_com_object("PowerPoint.Application")
+        if word is None:
+            word = initialize_com_object("Word.Application")
 
-while True:
-    if ppt is None:
-        ppt = initialize_com_object("PowerPoint.Application")
-    if word is None:
-        word = initialize_com_object("Word.Application")
+        log_file_path = process_files()
+        if log_file_path:
+            check_and_rename_yesterday_log()
+            upload_files_to_github(config['repo_name'], config['github_token'], upload_queue, log_file_path)
+        time.sleep(config['check_interval'])
 
-    log_file_path = process_files()
-    if log_file_path:
-        check_and_rename_yesterday_log()
-        upload_files_to_github(config['repo_name'], config['github_token'], upload_queue, log_file_path)
-    time.sleep(config['check_interval'])
+if __name__ == "__main__":
+    main()
