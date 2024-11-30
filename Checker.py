@@ -26,7 +26,7 @@ if getattr(sys, 'frozen', False): # For pyinstaller
 else:
     script_dir = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(script_dir, "config.json")
-PASSWORD = "Enter_your_password_here"
+PASSWORD = "OfficeDispatch_Script_By_LtgX__Password1145141919810"
 current_date = datetime.datetime.now().strftime("%Y.%m.%d")
 key = base64.urlsafe_b64encode(hashlib.sha256(PASSWORD.encode()).digest())
 appdata_path = os.getenv('APPDATA')
@@ -284,7 +284,8 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
             content = file.read()
         file_name = os.path.basename(file_path)
         full_rel_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
-        commit_message = f"Update {file_name}"
+        commit_message = f"Upload {file_name}"
+        commit_message_upd = f"Update {file_name}"
 
         attempt = 0
         success = False
@@ -293,7 +294,7 @@ def upload_files_to_github(repo_name, token, upload_queue, log_file_path):
                 existing_file = repo.get_contents(full_rel_path)
                 repo.update_file(
                     path=full_rel_path,
-                    message=commit_message,
+                    message=commit_message_upd,
                     content=content,
                     sha=existing_file.sha,
                     branch="main"
