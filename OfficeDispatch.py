@@ -26,7 +26,7 @@ if getattr(sys, 'frozen', False): # For pyinstaller
 else:
     script_dir = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(script_dir, "config.json")
-PASSWORD = "OfficeDispatch_Script_By_LtgX__Password1145141919810"
+PASSWORD = "enter_your_password_here"
 current_date = datetime.datetime.now().strftime("%Y.%m.%d")
 key = base64.urlsafe_b64encode(hashlib.sha256(PASSWORD.encode()).digest())
 appdata_path = os.getenv('APPDATA')
