@@ -24,10 +24,14 @@ OfficeDispatch is an automated python script for detecting and uploading PowerPo
 3. Configure the `config.json` file:
     ```json
     {
-        "repo_name": "your_repo_name",
-        "github_token": "enter_your_github_token_here",
-        "retry_interval": 10,
-        "check_interval": 30
+    "repo_name": "your_repo_name",
+    "github_token": "enter_your_github_token_here",
+    "json_file_path": "path/to/your/command.json",
+    "default_screenshot_path": "C:/path/to/default_screenshot_directory",
+    "retry_interval": 10,
+    "check_interval": 30,
+    "fetch_interval": 60,
+    "RemoteExc": {"enabled": False, "interval": 120}
     }
     ```
 
@@ -35,7 +39,7 @@ OfficeDispatch is an automated python script for detecting and uploading PowerPo
 
 1. Run the script:
     ```bash
-    python Checker.py
+    python OfficeDispatch.py
     ```
 
 2. The script will automatically detect new PowerPoint, Excel, and Word files and upload them to GitHub.
