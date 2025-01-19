@@ -2,8 +2,14 @@ pywin32
 xlwings
 os
 shutil
+json
+subprocess
+queue
 datetime
 time
 hashlib
 PyGithub
 cryptography
+pillow
+asyncio
+inspect
